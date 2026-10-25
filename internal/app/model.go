@@ -302,6 +302,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.currentDir = target.Path
 				m.cursor = 0
 				m.scrollOffset = 0
+				m.activeTab = 0
+				m.searchResults = nil
+				m.searchQuery = ""
+				m.searchActive = false
 				return m, LoadDirEntriesCmd(m.idx, m.currentDir)
 			}
 		}
