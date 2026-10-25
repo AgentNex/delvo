@@ -1,5 +1,5 @@
 {
-  "name": "delvo",
+  "name": "@agentnex/delvo",
   "version": "0.1.0",
   "description": "Ultra-fast terminal file manager and disk usage visualizer written in Go",
   "bin": {

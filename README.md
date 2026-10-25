@@ -91,21 +91,21 @@ curl -fsSL https://raw.githubusercontent.com/AgentNex/delvo/main/install.sh | ba
 
 ### Channel 2: npm Package Manager
 
-Delvo provides a minimal npm wrapper (`delvo`) that downloads the native Go binary during post-installation and sets up the `dvo` command. Delvo itself remains 100% Go and runs natively without Node.js execution overhead.
+Delvo provides a minimal npm wrapper ([`@agentnex/delvo`](https://www.npmjs.com/package/@agentnex/delvo)) that downloads the native Go binary during post-installation and registers the `dvo` command. Delvo itself remains 100% Go and runs natively without Node.js execution overhead.
 
 **Prerequisites:** Node.js (>= 16.0.0) and npm.
 
 ```bash
 # Install globally
-npm install -g delvo
+npm install -g @agentnex/delvo
 
 # Or run ephemerally with npx
-npx delvo
+npx @agentnex/delvo
 ```
 
 #### Uninstalling via npm
 ```bash
-npm uninstall -g delvo
+npm uninstall -g @agentnex/delvo
 ```
 
 ---
