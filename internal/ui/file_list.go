@@ -3,9 +3,9 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/AgentNex/delvo/internal/scanner"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // FileListParams supplies state to render the virtualized file table.
@@ -45,6 +45,12 @@ func RenderFileList(p FileListParams) string {
 		isCursor := i == p.Cursor
 		_, isSelected := p.Selected[e.Path]
 
+		// 0. Active row pointer
+		cursorMark := "  "
+		if isCursor {
+			cursorMark = "▸ "
+		}
+
 		// 1. Selection marker
 		var mark string
 		if isSelected {
@@ -80,12 +86,12 @@ func RenderFileList(p FileListParams) string {
 		// 5. Short time (e.g. "02 Jan 15:04")
 		timeStr := e.ModTime.Format("02 Jan 15:04")
 
-		// Calculate available width for name
-		// Reserved: mark(3) + space(1) + type(3) + space(1) + size(8) + space(1) + time(12) + usageBar
-		reserved := 3 + 1 + 3 + 1 + 8 + 1 + 12 + utf8.RuneCountInString(usageBar) + 2
+		// Calculate available width for name using ANSI visual width
+		// Reserved: cursor(2) + mark(3) + space(1) + type(3) + space(1) + size(8) + space(1) + time(12) + usageBar
+		reserved := 2 + 3 + 1 + 3 + 1 + 8 + 1 + 12 + ansi.StringWidth(usageBar) + 2
 		nameWidth := p.Width - reserved
-		if nameWidth < 10 {
-			nameWidth = 10
+		if nameWidth < 8 {
+			nameWidth = 8
 		}
 
 		var displayName string
@@ -107,7 +113,7 @@ func RenderFileList(p FileListParams) string {
 		}
 
 		// Row content assembly
-		rowContent := fmt.Sprintf("%s %s %s %s %s%s", mark, typeBadge, paddedName, sizeFormatted, timeStr, usageBar)
+		rowContent := fmt.Sprintf("%s%s %s %s %s %s%s", cursorMark, mark, typeBadge, paddedName, sizeFormatted, timeStr, usageBar)
 
 		if isCursor {
 			sb.WriteString(p.Theme.RowActive.Render(rowContent))

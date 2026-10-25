@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/AgentNex/delvo/internal/config"
 	"github.com/AgentNex/delvo/internal/filesystem"
 	"github.com/AgentNex/delvo/internal/filter"
@@ -23,6 +24,7 @@ type Model struct {
 	cfg               *config.Config
 	idx               *index.Index
 	scanner           *scanner.Scanner
+	scanProgressChan  chan scanner.ScanProgress
 	watcher           *watcher.FSNotifyWatcher
 	watcherEvents     <-chan watcher.ChangeEvent
 	activeTab         int // 0: Browse, 1: Search, 2: DiskUsage, 3: Filters
@@ -76,28 +78,42 @@ func NewModel(cfg *config.Config, idx *index.Index) (*Model, error) {
 		}
 	}
 
+	// Preload existing index entries if available
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	cachedEntries, _ := idx.GetAllEntries(ctx)
+	cancel()
+
+	statusMsg := ""
+	if len(cachedEntries) > 0 {
+		statusMsg = fmt.Sprintf("Loaded %d cached items from index", len(cachedEntries))
+	}
+
 	return &Model{
-		cfg:            cfg,
-		idx:            idx,
-		scanner:        scan,
-		watcher:        w,
-		watcherEvents:  wEvents,
-		activeTab:      0,
-		currentDir:     currentDir,
-		selected:       make(map[string]struct{}),
-		matchedIndices: make(map[int][]int),
-		filter:         filter.DefaultFilterState(),
-		sort:           filter.DefaultSortState(),
-		theme:          ui.NewDarkNavyTheme(),
-		width:          80,
-		height:         24,
+		cfg:              cfg,
+		idx:              idx,
+		scanner:          scan,
+		scanProgressChan: make(chan scanner.ScanProgress, 100),
+		watcher:          w,
+		watcherEvents:    wEvents,
+		activeTab:        0,
+		currentDir:       currentDir,
+		allEntries:       cachedEntries,
+		selected:         make(map[string]struct{}),
+		matchedIndices:   make(map[int][]int),
+		filter:           filter.DefaultFilterState(),
+		sort:             filter.DefaultSortState(),
+		theme:            ui.NewDarkNavyTheme(),
+		statusMessage:    statusMsg,
+		width:            80,
+		height:           24,
 	}, nil
 }
 
 // Init sets up initial commands on app launch.
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
-	cmds = append(cmds, StartScanCmd(m.scanner, m.idx))
+	cmds = append(cmds, StartScanCmd(m.scanner, m.idx, m.scanProgressChan))
+	cmds = append(cmds, ListenScanProgressCmd(m.scanProgressChan))
 	if m.currentDir != "" {
 		cmds = append(cmds, LoadDirEntriesCmd(m.idx, m.currentDir))
 	}
@@ -115,10 +131,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case ScanProgressMsg:
+		m.scanProgress = msg.Progress
+		return m, ListenScanProgressCmd(m.scanProgressChan)
+
 	case ScanCompleteMsg:
 		if msg.Err == nil && msg.Result != nil {
 			m.allEntries = msg.Result.Entries
 			m.scanProgress = msg.Result.Progress
+			m.scanProgress.IsComplete = true
+			m.scanProgress.IsProvisional = false
 			m.statusMessage = fmt.Sprintf("Indexed %d items (%s)", msg.Result.Progress.FilesScanned, scanner.FormatSize(msg.Result.Progress.BytesScanned))
 			return m, LoadDirEntriesCmd(m.idx, m.currentDir)
 		} else if msg.Err != nil {
@@ -225,8 +247,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.recomputeDisplayed()
 			return m, nil
 		case "backspace":
-			if len(m.searchQuery) > 0 {
-				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+			runes := []rune(m.searchQuery)
+			if len(runes) > 0 {
+				m.searchQuery = string(runes[:len(runes)-1])
 				return m, SearchCmd(m.allEntries, m.searchQuery, m.currentDir, m.activeTab == 1, m.cfg.CaseSensitive)
 			}
 		case "up", "k":
@@ -295,7 +318,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		// Toggle select all visible
-		if len(m.selected) == len(m.displayedEntries) {
+		if len(m.selected) == len(m.displayedEntries) && len(m.selected) > 0 {
 			m.selected = make(map[string]struct{})
 		} else {
 			for _, e := range m.displayedEntries {
@@ -335,9 +358,28 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.recomputeDisplayed()
 
 	case "4":
-		m.activeTab = 3 // Filters toggle
+		m.activeTab = 3 // Filters tab
 		m.filter.ShowHidden = !m.filter.ShowHidden
 		m.recomputeDisplayed()
+
+	case "f":
+		// Cycle type filter (All -> Files -> Dirs)
+		switch m.filter.Type {
+		case filter.TypeAll:
+			m.filter.Type = filter.TypeFiles
+		case filter.TypeFiles:
+			m.filter.Type = filter.TypeDirs
+		default:
+			m.filter.Type = filter.TypeAll
+		}
+		m.recomputeDisplayed()
+		m.statusMessage = fmt.Sprintf("Filter: %s", m.filter.Type)
+
+	case "F":
+		// Toggle hidden files
+		m.filter.ShowHidden = !m.filter.ShowHidden
+		m.recomputeDisplayed()
+		m.statusMessage = fmt.Sprintf("Show hidden: %v", m.filter.ShowHidden)
 
 	case "s":
 		// Cycle sort
@@ -362,7 +404,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.statusMessage = "Rescanning..."
-		return m, StartScanCmd(m.scanner, m.idx)
+		return m, tea.Batch(
+			StartScanCmd(m.scanner, m.idx, m.scanProgressChan),
+			ListenScanProgressCmd(m.scanProgressChan),
+		)
 	}
 
 	return m, nil
@@ -512,7 +557,7 @@ func (m *Model) View() tea.View {
 	sb.WriteByte('\n')
 	sb.WriteString(helpBar)
 
-	// Overlays / Modals
+	// Overlays / Modals - properly centered using lipgloss.Place
 	rendered := sb.String()
 	if m.showDeleteConfirm {
 		paths := m.getSelectedOrCurrentPaths()
@@ -532,16 +577,16 @@ func (m *Model) View() tea.View {
 			Height:    m.height,
 			Theme:     m.theme,
 		})
-		rendered = confirmBox + "\n\n" + rendered
+		rendered = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, confirmBox)
 	} else if m.showDetailsModal && len(m.displayedEntries) > 0 && m.cursor < len(m.displayedEntries) {
 		modal := ui.RenderDetailsPanel(ui.DetailsParams{
 			Entry:      &m.displayedEntries[m.cursor],
 			ParentSize: m.calculateParentSize(),
 			Width:      m.width - 4,
-			Height:     10,
+			Height:     geom.MainHeight,
 			Theme:      m.theme,
 		})
-		rendered = modal + "\n\n" + rendered
+		rendered = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 	}
 
 	v := tea.NewView(rendered)

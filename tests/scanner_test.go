@@ -2,8 +2,10 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/AgentNex/delvo/internal/scanner"
@@ -42,9 +44,12 @@ func TestScannerParallelTraversal(t *testing.T) {
 		BatchSize: 10,
 	})
 
+	var batchesMu sync.Mutex
 	var batches [][]scanner.Entry
 	res, err := s.Scan(context.Background(), nil, func(batch []scanner.Entry) error {
+		batchesMu.Lock()
 		batches = append(batches, batch)
+		batchesMu.Unlock()
 		return nil
 	})
 
@@ -75,6 +80,42 @@ func TestScannerParallelTraversal(t *testing.T) {
 	}
 	if res.DirSizes[tempDir] != 650 {
 		t.Errorf("expected tempDir total size 650, got %d", res.DirSizes[tempDir])
+	}
+}
+
+func TestScannerDeepStructure(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a chain of 40 nested directories with a file at each level
+	cur := tempDir
+	totalExpectedFiles := 40
+	for i := 0; i < totalExpectedFiles; i++ {
+		cur = filepath.Join(cur, fmt.Sprintf("level_%d", i))
+		if err := os.MkdirAll(cur, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cur, "data.bin"), []byte("test"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := scanner.New(scanner.ScanOptions{
+		Roots:     []string{tempDir},
+		Workers:   4,
+		BatchSize: 5,
+	})
+
+	res, err := s.Scan(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("deep scan failed: %v", err)
+	}
+
+	if res.Progress.FilesScanned != int64(totalExpectedFiles) {
+		t.Errorf("expected %d files scanned in deep hierarchy, got %d", totalExpectedFiles, res.Progress.FilesScanned)
+	}
+	expectedDirs := int64(totalExpectedFiles + 1) // 40 subdirectories + root directory
+	if res.Progress.DirsScanned != expectedDirs {
+		t.Errorf("expected %d dirs scanned, got %d", expectedDirs, res.Progress.DirsScanned)
 	}
 }
 

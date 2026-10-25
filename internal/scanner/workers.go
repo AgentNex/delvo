@@ -56,6 +56,73 @@ type ScanResult struct {
 	Progress ScanProgress
 }
 
+// dirWorkQueue coordinates directory traversal without channel capacity deadlocks.
+type dirWorkQueue struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	dirs     []string
+	inFlight int
+	closed   bool
+}
+
+func newDirWorkQueue() *dirWorkQueue {
+	q := &dirWorkQueue{
+		dirs: make([]string, 0, 256),
+	}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *dirWorkQueue) push(dirs ...string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.dirs = append(q.dirs, dirs...)
+	q.cond.Broadcast()
+}
+
+func (q *dirWorkQueue) pop(ctx context.Context) (string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for len(q.dirs) == 0 && q.inFlight > 0 && !q.closed {
+		if ctx.Err() != nil {
+			q.closed = true
+			q.cond.Broadcast()
+			return "", false
+		}
+		q.cond.Wait()
+	}
+
+	if q.closed || len(q.dirs) == 0 {
+		return "", false
+	}
+
+	last := len(q.dirs) - 1
+	dir := q.dirs[last]
+	q.dirs = q.dirs[:last]
+	q.inFlight++
+	return dir, true
+}
+
+func (q *dirWorkQueue) done() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.inFlight--
+	if q.inFlight == 0 && len(q.dirs) == 0 {
+		q.cond.Broadcast()
+	}
+}
+
+func (q *dirWorkQueue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	q.cond.Broadcast()
+}
+
 // Scan runs the parallel scan across all configured roots.
 func (s *Scanner) Scan(
 	ctx context.Context,
@@ -76,36 +143,67 @@ func (s *Scanner) Scan(
 	var allEntriesMu sync.Mutex
 	var allEntries []Entry
 
-	// Work queue for directories
-	dirQueue := make(chan string, 10000)
+	// Dynamic work queue
+	queue := newDirWorkQueue()
+
+	// Cancellation listener for queue
+	go func() {
+		<-ctx.Done()
+		queue.close()
+	}()
+
+	// Single writer channel for serializing SQLite transactions
+	batchChan := make(chan []Entry, s.opts.Workers*2)
+	var writerWg sync.WaitGroup
+	if batchFn != nil {
+		writerWg.Add(1)
+		go func() {
+			defer writerWg.Done()
+			for batch := range batchChan {
+				if err := batchFn(batch); err != nil {
+					errMu.Lock()
+					scanErrors = append(scanErrors, fmt.Sprintf("batch write: %v", err))
+					errMu.Unlock()
+				}
+			}
+		}()
+	}
+
+	var lastProgressTime time.Time
+	var progressMu sync.Mutex
+	sendProgress := func(curPath string, isComplete bool) {
+		if progressFn == nil {
+			return
+		}
+		progressMu.Lock()
+		now := time.Now()
+		if !isComplete && now.Sub(lastProgressTime) < 50*time.Millisecond {
+			progressMu.Unlock()
+			return
+		}
+		lastProgressTime = now
+		progressMu.Unlock()
+
+		errMu.Lock()
+		errsCopy := make([]string, len(scanErrors))
+		copy(errsCopy, scanErrors)
+		errMu.Unlock()
+
+		progressFn(ScanProgress{
+			FilesScanned:  filesCount.Load(),
+			DirsScanned:   dirsCount.Load(),
+			BytesScanned:  bytesCount.Load(),
+			CurrentPath:   curPath,
+			Errors:        errsCopy,
+			IsComplete:    isComplete,
+			IsProvisional: !isComplete,
+			StartTime:     startTime,
+			Duration:      time.Since(startTime),
+		})
+	}
 
 	// Bounded worker pool
 	var activeWorkers sync.WaitGroup
-	var inFlightDirs atomic.Int64
-
-	// Helper to send progress
-	sendProgress := func(curPath string, isComplete bool) {
-		if progressFn != nil {
-			errMu.Lock()
-			errsCopy := make([]string, len(scanErrors))
-			copy(errsCopy, scanErrors)
-			errMu.Unlock()
-
-			progressFn(ScanProgress{
-				FilesScanned:  filesCount.Load(),
-				DirsScanned:   dirsCount.Load(),
-				BytesScanned:  bytesCount.Load(),
-				CurrentPath:   curPath,
-				Errors:        errsCopy,
-				IsComplete:    isComplete,
-				IsProvisional: !isComplete,
-				StartTime:     startTime,
-				Duration:      time.Since(startTime),
-			})
-		}
-	}
-
-	// Worker logic
 	worker := func() {
 		defer activeWorkers.Done()
 
@@ -116,13 +214,18 @@ func (s *Scanner) Scan(
 				return nil
 			}
 
+			batchCopy := make([]Entry, len(localBatch))
+			copy(batchCopy, localBatch)
+
 			allEntriesMu.Lock()
-			allEntries = append(allEntries, localBatch...)
+			allEntries = append(allEntries, batchCopy...)
 			allEntriesMu.Unlock()
 
 			if batchFn != nil {
-				if err := batchFn(localBatch); err != nil {
-					return err
+				select {
+				case batchChan <- batchCopy:
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 			localBatch = localBatch[:0]
@@ -130,97 +233,76 @@ func (s *Scanner) Scan(
 		}
 
 		for {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil {
 				_ = flushBatch()
 				return
-			case dir, ok := <-dirQueue:
-				if !ok {
+			}
+
+			dir, ok := queue.pop(ctx)
+			if !ok {
+				_ = flushBatch()
+				return
+			}
+
+			sendProgress(dir, false)
+			dirsCount.Add(1)
+
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				errMu.Lock()
+				scanErrors = append(scanErrors, fmt.Sprintf("skip %s: %v", dir, err))
+				errMu.Unlock()
+				queue.done()
+				continue
+			}
+
+			var subdirs []string
+			for _, d := range entries {
+				if ctx.Err() != nil {
 					_ = flushBatch()
+					queue.done()
 					return
 				}
 
-				sendProgress(dir, false)
-				dirsCount.Add(1)
+				fullPath := filepath.Join(dir, d.Name())
 
-				// Read dir entries
-				entries, err := os.ReadDir(dir)
+				// Use Lstat so we don't follow symlinks inadvertently
+				fi, err := os.Lstat(fullPath)
 				if err != nil {
-					errMu.Lock()
-					scanErrors = append(scanErrors, fmt.Sprintf("skip %s: %v", dir, err))
-					errMu.Unlock()
-					inFlightDirs.Add(-1)
 					continue
 				}
 
-				for _, d := range entries {
-					select {
-					case <-ctx.Done():
-						_ = flushBatch()
-						inFlightDirs.Add(-1)
-						return
-					default:
-					}
+				entry := ExtractEntry(fullPath, fi)
+				localBatch = append(localBatch, entry)
 
-					fullPath := filepath.Join(dir, d.Name())
-
-					// Use Lstat so we don't follow symlinks inadvertently
-					fi, err := os.Lstat(fullPath)
-					if err != nil {
-						// File might have disappeared or permission denied
-						continue
-					}
-
-					entry := ExtractEntry(fullPath, fi)
-					localBatch = append(localBatch, entry)
-
-					if !entry.IsDir {
-						filesCount.Add(1)
-						bytesCount.Add(entry.Size)
-					}
-
-					if len(localBatch) >= s.opts.BatchSize {
-						if err := flushBatch(); err != nil {
-							errMu.Lock()
-							scanErrors = append(scanErrors, fmt.Sprintf("batch write: %v", err))
-							errMu.Unlock()
-						}
-					}
-
-					// Recurse into subdirectories if permitted
-					if entry.IsDir && !entry.IsSymlink {
-						// Don't recurse if outside configured roots
-						if filesystem.IsInsideRoots(fullPath, s.opts.Roots) {
-							inFlightDirs.Add(1)
-							select {
-							case dirQueue <- fullPath:
-							case <-ctx.Done():
-								_ = flushBatch()
-								inFlightDirs.Add(-1)
-								return
-							}
-						}
-					}
+				if !entry.IsDir {
+					filesCount.Add(1)
+					bytesCount.Add(entry.Size)
 				}
 
-				if err := flushBatch(); err != nil {
-					errMu.Lock()
-					scanErrors = append(scanErrors, fmt.Sprintf("batch write: %v", err))
-					errMu.Unlock()
+				if len(localBatch) >= s.opts.BatchSize {
+					_ = flushBatch()
 				}
 
-				inFlightDirs.Add(-1)
+				// Recurse into subdirectories if permitted
+				if entry.IsDir && (!entry.IsSymlink || s.opts.FollowSymlinks) {
+					if filesystem.IsInsideRoots(fullPath, s.opts.Roots) {
+						subdirs = append(subdirs, fullPath)
+					}
+				}
 			}
+
+			if len(subdirs) > 0 {
+				queue.push(subdirs...)
+			}
+
+			_ = flushBatch()
+			queue.done()
 		}
 	}
 
-	// Start worker pool
-	for i := 0; i < s.opts.Workers; i++ {
-		activeWorkers.Add(1)
-		go worker()
-	}
-
-	// Enqueue initial roots
+	// Enqueue initial roots first
+	var initialRoots []string
 	for _, root := range s.opts.Roots {
 		absRoot, err := filesystem.ValidateRoot(root)
 		if err != nil {
@@ -238,36 +320,31 @@ func (s *Scanner) Scan(
 			allEntriesMu.Unlock()
 
 			if batchFn != nil {
-				_ = batchFn([]Entry{rootEntry})
+				select {
+				case batchChan <- []Entry{rootEntry}:
+				case <-ctx.Done():
+				}
 			}
 		}
 
-		inFlightDirs.Add(1)
-		dirQueue <- absRoot
+		initialRoots = append(initialRoots, absRoot)
 	}
 
-	// Monitor completion: close dirQueue when no more in-flight directories remain
-	doneChan := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				close(dirQueue)
-				close(doneChan)
-				return
-			default:
-				if inFlightDirs.Load() == 0 {
-					close(dirQueue)
-					close(doneChan)
-					return
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-	}()
+	if len(initialRoots) > 0 {
+		queue.push(initialRoots...)
+	}
 
-	<-doneChan
+	// Start worker pool after initial roots are enqueued
+	for i := 0; i < s.opts.Workers; i++ {
+		activeWorkers.Add(1)
+		go worker()
+	}
+
 	activeWorkers.Wait()
+
+	// Shut down writer channel
+	close(batchChan)
+	writerWg.Wait()
 
 	// Compute bottom-up directory totals
 	dirSizes := ComputeDirectorySizes(allEntries)
@@ -293,9 +370,7 @@ func (s *Scanner) Scan(
 		Duration:      time.Since(startTime),
 	}
 
-	if progressFn != nil {
-		progressFn(finalProgress)
-	}
+	sendProgress("Scan complete", true)
 
 	return &ScanResult{
 		Entries:  allEntries,

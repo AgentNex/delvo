@@ -62,14 +62,14 @@ func RenderHelpBar(width int, searchActive bool, theme Theme) string {
 
 	if width < 55 {
 		// Ultra compact for narrow phone screens
-		return theme.HelpDesc.Render(" [j/k] Nav │ [Enter] Open │ [Spc] Sel │ [/] Search │ [d] Del │ [q] Quit ")
+		return theme.HelpDesc.Render(" [j/k] Nav │ [↵] Open │ [Spc] Sel │ [/] Search │ [f] Filter │ [d] Del │ [q] Quit ")
 	}
 
 	if width < 85 {
 		// Medium compact
-		return theme.HelpDesc.Render(" [↑/↓] Nav │ [Enter] Open │ [Space] Select │ [a] All │ [/] Search │ [d] Delete │ [q] Quit ")
+		return theme.HelpDesc.Render(" [↑/↓] Nav │ [Enter] Open │ [Space] Sel │ [/] Search │ [s] Sort │ [f] Filter │ [d] Delete │ [q] Quit ")
 	}
 
 	// Full desktop/landscape width
-	return theme.HelpDesc.Render(" [↑/k ↓/j] Navigate │ [Enter] Open │ [Space] Select │ [a] Select All │ [c] Clear │ [/] Search │ [s] Sort │ [d] Delete │ [r] Rescan │ [q] Quit ")
+	return theme.HelpDesc.Render(" [↑/k ↓/j] Navigate │ [Enter] Open │ [Space] Select │ [a] All │ [/] Search │ [s] Sort │ [f] Filter │ [d] Delete │ [r] Rescan │ [q] Quit ")
 }

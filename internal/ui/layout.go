@@ -3,7 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // LayoutGeometry tracks dimensions and responsive view splits.
@@ -60,28 +61,26 @@ func ComputeLayout(width, height int) LayoutGeometry {
 	}
 }
 
-// TruncateString cuts string to maxWidth runes, appending "…" if shortened.
+// TruncateString cuts string to maxWidth visual columns, appending "…" if shortened.
+// It is ANSI-aware and preserves escape sequences without splitting them.
 func TruncateString(s string, maxWidth int) string {
 	if maxWidth <= 0 {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
+	w := ansi.StringWidth(s)
+	if w <= maxWidth {
 		return s
 	}
-	if maxWidth <= 1 {
-		return string(runes[:1])
-	}
-	return string(runes[:maxWidth-1]) + "…"
+	return ansi.Truncate(s, maxWidth, "…")
 }
 
-// PadRight pads s with spaces up to targetWidth.
+// PadRight pads s with spaces up to visual targetWidth columns.
 func PadRight(s string, targetWidth int) string {
-	l := utf8.RuneCountInString(s)
-	if l >= targetWidth {
+	w := ansi.StringWidth(s)
+	if w >= targetWidth {
 		return s
 	}
-	return s + strings.Repeat(" ", targetWidth-l)
+	return s + strings.Repeat(" ", targetWidth-w)
 }
 
 // RenderDiskBar generates a gdu/ncdu style usage visual bar [████░░░░] 50%.

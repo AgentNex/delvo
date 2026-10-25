@@ -12,19 +12,37 @@ import (
 	"github.com/AgentNex/delvo/internal/watcher"
 )
 
-// StartScanCmd initiates parallel scanning in a background goroutine.
-func StartScanCmd(s *scanner.Scanner, idx *index.Index) tea.Cmd {
+// StartScanCmd initiates parallel scanning in a background goroutine and streams progress.
+func StartScanCmd(s *scanner.Scanner, idx *index.Index, progressChan chan<- scanner.ScanProgress) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		res, err := s.Scan(ctx, nil, func(batch []scanner.Entry) error {
+		res, err := s.Scan(ctx, func(p scanner.ScanProgress) {
+			if progressChan != nil {
+				select {
+				case progressChan <- p:
+				default:
+				}
+			}
+		}, func(batch []scanner.Entry) error {
 			return idx.BatchUpsert(ctx, batch)
 		})
 		if err == nil && res != nil {
 			_ = idx.UpdateDirSizes(ctx, res.DirSizes)
 		}
 		return ScanCompleteMsg{Result: res, Err: err}
+	}
+}
+
+// ListenScanProgressCmd awaits the next scan progress update.
+func ListenScanProgressCmd(ch <-chan scanner.ScanProgress) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return ScanProgressMsg{Progress: p}
 	}
 }
 

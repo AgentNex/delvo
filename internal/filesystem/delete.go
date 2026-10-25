@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
+
+var trashCounter atomic.Uint64
 
 // DeleteOptions controls how deletions are executed.
 type DeleteOptions struct {
@@ -37,10 +40,10 @@ func DeleteItems(paths []string, roots []string, opts DeleteOptions) []DeleteRes
 			continue
 		}
 
-		// 2. Revalidate existence via Lstat (do not follow symlinks)
-		fi, err := os.Lstat(p)
+		// 2. Revalidate existence via Revalidate (do not follow symlinks)
+		fi, err := Revalidate(p, time.Time{}, 0)
 		if err != nil {
-			res.Error = fmt.Sprintf("stat before delete: %v", err)
+			res.Error = fmt.Sprintf("revalidate before delete: %v", err)
 			results = append(results, res)
 			continue
 		}
@@ -60,7 +63,7 @@ func DeleteItems(paths []string, roots []string, opts DeleteOptions) []DeleteRes
 				continue
 			}
 
-			destName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(p))
+			destName := fmt.Sprintf("%d_%d_%s", time.Now().UnixNano(), trashCounter.Add(1), filepath.Base(p))
 			destPath := filepath.Join(trashDir, destName)
 
 			if err := os.Rename(p, destPath); err != nil {

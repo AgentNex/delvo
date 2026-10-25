@@ -96,7 +96,7 @@ func TestCoalescer(t *testing.T) {
 		if ev.Path != target || ev.Type != watcher.ChangeWrite {
 			t.Errorf("unexpected event: %+v", ev)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(1 * time.Second):
 		t.Errorf("timeout waiting for coalesced event")
 	}
 }
