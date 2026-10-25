@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Ultra-fast terminal file manager and disk usage visualizer written in Go",
   "bin": {
-    "dvo": "./bin/dvo.js"
+    "dvo": "bin/dvo.js"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"
