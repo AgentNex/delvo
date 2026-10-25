@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -50,14 +49,7 @@ func ExtractEntry(path string, fi os.FileInfo) Entry {
 		ext = strings.ToLower(filepath.Ext(name))
 	}
 
-	var dev, ino uint64
-	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
-		dev = uint64(stat.Dev)
-		ino = uint64(stat.Ino)
-		if stat.Blocks > 0 {
-			allocatedSize = stat.Blocks * 512
-		}
-	}
+	dev, ino, allocatedSize := getPlatformStat(fi, allocatedSize)
 
 	return Entry{
 		Path:          cleanPath,

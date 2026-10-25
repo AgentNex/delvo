@@ -5,7 +5,14 @@
 *.dll
 *.so
 *.dylib
-bin/
+/bin/
+dist/
+npm/bin/dvo
+npm/bin/dvo.exe
+!npm/bin/dvo.js
+npm/*.tgz
+*.tar.gz
+*.zip
 
 # Test artifacts and coverage
 *.out

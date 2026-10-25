@@ -1,0 +1,41 @@
+{
+  "name": "delvo",
+  "version": "0.1.0",
+  "description": "Ultra-fast terminal file manager and disk usage visualizer written in Go",
+  "bin": {
+    "dvo": "./bin/dvo.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "bin/dvo.js",
+    "scripts/install.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentNex/delvo.git"
+  },
+  "keywords": [
+    "delvo",
+    "dvo",
+    "file-manager",
+    "disk-usage",
+    "cli",
+    "tui",
+    "termux",
+    "android",
+    "golang"
+  ],
+  "author": "AgentNex",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/AgentNex/delvo/issues"
+  },
+  "homepage": "https://github.com/AgentNex/delvo#readme"
+}

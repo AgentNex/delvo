@@ -46,33 +46,104 @@ Delvo adheres strictly to a Go-only stack with minimal, well-justified direct de
 
 ---
 
-## Installation
+## Installation & Distribution
 
-### In Termux (Android)
+Delvo offers multiple verified distribution channels tailored for Unix, Termux (Android), macOS, and Windows.
+
+### Platform Support Matrix
+
+| Platform | Architecture | Binary Archive | Verified Channels |
+| :--- | :--- | :--- | :--- |
+| **Android / Termux** | `arm64` (`aarch64`) | `delvo-android-arm64.tar.gz` | curl, npm, GitHub Releases, Source |
+| **Linux** | `amd64` (`x86_64`) | `delvo-linux-amd64.tar.gz` | curl, npm, GitHub Releases, Source |
+| **Linux** | `arm64` (`aarch64`) | `delvo-linux-arm64.tar.gz` | curl, npm, GitHub Releases, Source |
+| **macOS** | Apple Silicon (`arm64`) | `delvo-darwin-arm64.tar.gz` | curl, npm, GitHub Releases, Source |
+| **macOS** | Intel (`amd64`) | `delvo-darwin-amd64.tar.gz` | curl, npm, GitHub Releases, Source |
+| **Windows** | `x64` (`amd64`) | `delvo-windows-amd64.zip` | npm, GitHub Releases, Source |
+
+---
+
+### Channel 1: Automated `curl` Installer (Recommended for Termux & Linux/macOS)
+
+The standalone shell installer automatically detects your operating system and CPU architecture, downloads the matching verified release asset from GitHub, validates its SHA-256 checksum against `checksums.txt`, and installs `dvo` directly into `$PREFIX/bin` (on Termux) or `/usr/local/bin` / `~/.local/bin` (on Linux/macOS).
 
 ```bash
-# 1. Ensure Go and Git are installed
-pkg update && pkg install golang git
-
-# 2. Grant shared storage permissions (recommended)
-termux-setup-storage
-
-# 3. Clone and build Delvo
-git clone https://github.com/AgentNex/delvo.git
-cd delvo
-go build -o $PREFIX/bin/dvo ./cmd/dvo
-
-# 4. Launch Delvo
-dvo
+# Automated install via curl
+curl -fsSL https://raw.githubusercontent.com/AgentNex/delvo/main/install.sh | bash
 ```
 
-### From Source (Any Linux / macOS / BSD)
+#### Custom Installation Directory or Version
+```bash
+# Install to custom directory
+curl -fsSL https://raw.githubusercontent.com/AgentNex/delvo/main/install.sh | bash -s -- --install-dir ~/.local/bin
+
+# Install specific version
+curl -fsSL https://raw.githubusercontent.com/AgentNex/delvo/main/install.sh | bash -s -- --version v0.1.0
+```
+
+#### Uninstalling via curl installer
+```bash
+# Clean uninstallation
+curl -fsSL https://raw.githubusercontent.com/AgentNex/delvo/main/install.sh | bash -s -- --uninstall
+```
+
+---
+
+### Channel 2: npm Package Manager
+
+Delvo provides a minimal npm wrapper (`delvo`) that downloads the native Go binary during post-installation and sets up the `dvo` command. Delvo itself remains 100% Go and runs natively without Node.js execution overhead.
+
+**Prerequisites:** Node.js (>= 16.0.0) and npm.
 
 ```bash
+# Install globally
+npm install -g delvo
+
+# Or run ephemerally with npx
+npx delvo
+```
+
+#### Uninstalling via npm
+```bash
+npm uninstall -g delvo
+```
+
+---
+
+### Channel 3: GitHub Releases (Manual Download)
+
+Pre-compiled standalone binaries with cryptographic SHA-256 checksums are published on the [Delvo Releases page](https://github.com/AgentNex/delvo/releases).
+
+1. Download the archive for your OS/architecture and `checksums.txt`.
+2. Verify SHA-256 checksum:
+   ```bash
+   sha256sum --check --ignore-missing checksums.txt
+   ```
+3. Extract and place in your `$PATH`:
+   ```bash
+   tar -xzf delvo-linux-amd64.tar.gz
+   chmod +x dvo
+   mv dvo ~/.local/bin/
+   ```
+
+---
+
+### Channel 4: Build from Source (Fallback for Any Go-supported Platform)
+
+If your architecture or OS is not covered by precompiled binaries, you can install directly via Go:
+
+**Prerequisites:** Go 1.22+ and Git.
+
+```bash
+# Direct install via Go module toolchain
+go install github.com/AgentNex/delvo/cmd/dvo@latest
+
+# Or clone and compile locally
 git clone https://github.com/AgentNex/delvo.git
 cd delvo
-go build -o dvo ./cmd/dvo
-sudo mv dvo /usr/local/bin/
+go build -ldflags "-s -w" -o dvo ./cmd/dvo
+mv dvo $PREFIX/bin/   # On Termux
+# or: sudo mv dvo /usr/local/bin/  # On Linux/macOS
 ```
 
 ---
