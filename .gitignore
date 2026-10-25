@@ -1,0 +1,35 @@
+# Binaries
+/dvo
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test artifacts and coverage
+*.out
+*.test
+*.prof
+coverage/
+prof.cpu
+prof.mem
+
+# SQLite database and WAL files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local runtime data and logs
+*.log
+.delvo/
+local_data/
+
+# OS and Editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
