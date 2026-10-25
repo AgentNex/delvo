@@ -63,8 +63,16 @@ func DeleteItems(paths []string, roots []string, opts DeleteOptions) []DeleteRes
 				continue
 			}
 
-			destName := fmt.Sprintf("%d_%d_%s", time.Now().UnixNano(), trashCounter.Add(1), filepath.Base(p))
-			destPath := filepath.Join(trashDir, destName)
+			// Store in a unique directory inside trashDir to never exceed filesystem filename limits
+			subDirName := fmt.Sprintf("%d_%d", time.Now().UnixNano(), trashCounter.Add(1))
+			itemTrashDir := filepath.Join(trashDir, subDirName)
+			if err := os.MkdirAll(itemTrashDir, 0700); err != nil {
+				res.Error = fmt.Sprintf("create item trash dir: %v", err)
+				results = append(results, res)
+				continue
+			}
+
+			destPath := filepath.Join(itemTrashDir, filepath.Base(p))
 
 			if err := os.Rename(p, destPath); err != nil {
 				// If rename failed (e.g. cross-device), try copy + remove

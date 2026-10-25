@@ -129,6 +129,9 @@ func (s *Scanner) Scan(
 	progressFn func(ScanProgress),
 	batchFn func([]Entry) error,
 ) (*ScanResult, error) {
+	scanCtx, cancelScan := context.WithCancel(ctx)
+	defer cancelScan()
+
 	startTime := time.Now()
 	var (
 		filesCount atomic.Int64
@@ -148,7 +151,7 @@ func (s *Scanner) Scan(
 
 	// Cancellation listener for queue
 	go func() {
-		<-ctx.Done()
+		<-scanCtx.Done()
 		queue.close()
 	}()
 
@@ -224,8 +227,8 @@ func (s *Scanner) Scan(
 			if batchFn != nil {
 				select {
 				case batchChan <- batchCopy:
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-scanCtx.Done():
+					return scanCtx.Err()
 				}
 			}
 			localBatch = localBatch[:0]
@@ -233,12 +236,12 @@ func (s *Scanner) Scan(
 		}
 
 		for {
-			if ctx.Err() != nil {
+			if scanCtx.Err() != nil {
 				_ = flushBatch()
 				return
 			}
 
-			dir, ok := queue.pop(ctx)
+			dir, ok := queue.pop(scanCtx)
 			if !ok {
 				_ = flushBatch()
 				return
@@ -258,7 +261,7 @@ func (s *Scanner) Scan(
 
 			var subdirs []string
 			for _, d := range entries {
-				if ctx.Err() != nil {
+				if scanCtx.Err() != nil {
 					_ = flushBatch()
 					queue.done()
 					return
@@ -322,7 +325,7 @@ func (s *Scanner) Scan(
 			if batchFn != nil {
 				select {
 				case batchChan <- []Entry{rootEntry}:
-				case <-ctx.Done():
+				case <-scanCtx.Done():
 				}
 			}
 		}

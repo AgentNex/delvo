@@ -78,14 +78,21 @@ func NewModel(cfg *config.Config, idx *index.Index) (*Model, error) {
 		}
 	}
 
-	// Preload existing index entries if available
+	// Preload existing index entries if available and filter to configured roots
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	cachedEntries, _ := idx.GetAllEntries(ctx)
 	cancel()
 
+	var validCached []scanner.Entry
+	for _, e := range cachedEntries {
+		if filesystem.IsInsideRoots(e.Path, cfg.Roots) {
+			validCached = append(validCached, e)
+		}
+	}
+
 	statusMsg := ""
-	if len(cachedEntries) > 0 {
-		statusMsg = fmt.Sprintf("Loaded %d cached items from index", len(cachedEntries))
+	if len(validCached) > 0 {
+		statusMsg = fmt.Sprintf("Loaded %d cached items from index", len(validCached))
 	}
 
 	return &Model{
@@ -97,7 +104,7 @@ func NewModel(cfg *config.Config, idx *index.Index) (*Model, error) {
 		watcherEvents:    wEvents,
 		activeTab:        0,
 		currentDir:       currentDir,
-		allEntries:       cachedEntries,
+		allEntries:       validCached,
 		selected:         make(map[string]struct{}),
 		matchedIndices:   make(map[int][]int),
 		filter:           filter.DefaultFilterState(),
@@ -133,7 +140,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ScanProgressMsg:
 		m.scanProgress = msg.Progress
-		return m, ListenScanProgressCmd(m.scanProgressChan)
+		if !msg.Progress.IsComplete {
+			return m, ListenScanProgressCmd(m.scanProgressChan)
+		}
+		return m, nil
 
 	case ScanCompleteMsg:
 		if msg.Err == nil && msg.Result != nil {
@@ -403,7 +413,12 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showDetailsModal = !m.showDetailsModal
 
 	case "r":
+		if m.scanProgress.IsProvisional {
+			m.statusMessage = "Scan already in progress..."
+			return m, nil
+		}
 		m.statusMessage = "Rescanning..."
+		m.scanProgress.IsProvisional = true
 		return m, tea.Batch(
 			StartScanCmd(m.scanner, m.idx, m.scanProgressChan),
 			ListenScanProgressCmd(m.scanProgressChan),
@@ -439,7 +454,15 @@ func (m *Model) moveCursor(delta int) {
 }
 
 func (m *Model) recomputeDisplayed() {
-	filtered := filter.ApplyFilters(m.rawEntries, m.filter)
+	source := m.rawEntries
+	if m.activeTab == 1 && len(m.searchResults) > 0 {
+		source = make([]scanner.Entry, len(m.searchResults))
+		for i, res := range m.searchResults {
+			source[i] = res.Entry
+		}
+	}
+
+	filtered := filter.ApplyFilters(source, m.filter)
 	filter.SortEntries(filtered, m.sort)
 	m.displayedEntries = filtered
 	m.matchedIndices = nil
